@@ -1,0 +1,399 @@
+import tensorflow as tf
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from scipy.ndimage.filters import gaussian_filter
+from scipy.optimize import fmin
+from extrema import e3d
+from datetime import datetime
+import os
+
+t0 = datetime.now()
+
+############ FIX FLOAT ERRORS #########
+
+def FixZeros(values):
+  for i in range(len(values)):
+    if np.allclose(values[i],0):
+      values[i] = 0
+
+#######################################
+
+############### R-SQUARED #######################
+
+def r_squared(data, prediction):
+  sst = np.square(data - data.mean()).sum()
+  ssr = np.square(data - prediction).sum()
+
+  return 1 - (ssr / sst)
+
+#################################################
+
+################################# FIND EXTREMA POINTS ###################################
+
+def getextrema(x,y,z):
+  n = int(np.sqrt(len(z)))
+  G = z.reshape(n,n)
+  # add gridpoints at the edge
+  zmax, imax, zmin, imin = e3d(G)
+
+  zmax = np.array(zmax).astype('float64').ravel().tolist()
+  zmin = np.array(zmin).astype('float64').ravel().tolist()
+  imax = np.array(imax).astype('int').ravel().tolist()
+  imin = np.array(imin).astype('int').ravel().tolist()
+
+  extmin = []
+  for i in range(len(imin)):
+    if ((-180.0 <= x[imin[i]] <= 180.0) and (-180.0 <= y[imin[i]] <= 180.0)):
+      extmin.append([x[imin[i]], y[imin[i]],zmin[i]])
+
+  extmin=np.array(extmin)
+
+  extmax = []
+  for i in range(len(imax)):
+    if ((-180.0 <= x[imax[i]] <= 180.0) and (-180.0 <= y[imax[i]] <= 180.0)):
+      extmax.append([x[imax[i]], y[imax[i]],zmax[i]])
+
+  extmax = np.array(extmax)
+
+  return extmin,extmax
+
+#########################################################################################
+
+######### CONFORMATIONS ##########
+
+def conf(x,y):
+  if -180 <= x < -120:
+    if -180 <= y < -120:
+      z = 'beta-L   '
+    elif -120 <= y < 0:
+      z = 'delta-D  '
+    elif 0 <= y < 120:
+      z = 'delta-L  '
+    elif 120 <= y <= 180:
+      z = 'beta-L   '
+  elif -120 <= x < 0:
+    if -180 <= y < -120:
+      z = 'epsilon-L'
+    elif -120 <= y < 0:
+      z = 'alpha-L  '
+    elif 0 <= y < 120:
+      z = 'gamma-L  '
+    elif 120 <= y <= 180:
+      z = 'epsilon-L'
+  elif 0 <= x < 120:
+    if -180 <= y < -120:
+      z = 'epsilon-D'
+    elif -120 <= y < 0:
+      z = 'gamma-D  '
+    elif 0 <= y < 120:
+      z = 'alpha-D  '
+    elif 120 <= y <= 180:
+      z = 'epsilon-D'
+  elif 120 <= x <= 180:
+    if -180 <= y < -120:
+      z = 'beta-L   '
+    elif -120 <= y < 0:
+      z = 'delta-D  '
+    elif 0 <= y < 120:
+      z = 'delta-L  '
+    elif 120 <= y <= 180:
+      z = 'beta-L   '
+
+  return z
+
+##################################
+
+################ CONTOUR PLOT ########################
+
+def plot(x, data, color, fname):
+  # Plot contour of original data
+  plt.figure(figsize=(11,8.5))
+  #plt.figure()
+
+  # colorbar ticks
+  cb_min = np.floor(np.min(data))
+  cb_max = np.ceil(np.max(data))
+  cbar_levels = (((cb_max // 10) + 1) * 10) / 5
+  cbar_ticks = np.arange(0,cb_max,cbar_levels)
+    
+  # data smoothing
+  train_contour = gaussian_filter(data.reshape(len(x),len(x)).T, 1)
+  
+  # colormap used
+  colormap = color
+  
+  # filled contour
+  plt.contourf(x, 
+      x, 
+      train_contour, 
+      cmap=colormap, 
+      extent=[x[0],x[-1],x[0],x[-1]], 
+      levels=np.arange(cb_min,cb_max+0.5,cbar_levels/5))
+    
+  # colorbar
+  cb = plt.colorbar(ticks = cbar_ticks)
+  #cb.set_label(r'$$', fontsize=18)
+  
+  # contour lines
+  C = plt.contour(x, 
+      x, 
+      train_contour, 
+      extent=[x[0],x[-1],x[0],x[-1]], 
+      levels=np.arange(cb_min,cb_max+0.5,cbar_levels/5))
+    
+  #  # contour line labels
+  #  plt.clabel(C, inline=1, fontsize=12)
+  
+  cfaxes = plt.gca()
+  plt.sca(cb.ax)
+  plt.clim(vmin=0, vmax=cb_max)
+  plt.yticks(size='18')
+  
+  plt.sca(cfaxes)
+  plt.xticks(size='22')
+  plt.yticks(size='22')
+
+  plt.xlabel(r'$\phi$', fontsize=30)
+  plt.ylabel(r'$\psi$', fontsize=30)
+
+  plt.savefig(fname, bbox_inches='tight', transparent=True, pad_inches=0)
+  plt.close()
+
+######################################################
+
+################ IMPORT GAUSSIAN DATA ####################################
+
+data = pd.read_csv('../../../../../../data/G.csv', header=None)
+data.columns = ['Phi', 'Psi', 'Energy']
+data['Energy'] = (data['Energy'] - data['Energy'].min()) * 2625.499638
+
+##########################################################################
+
+############### PREPROCESS GAUSSIAN DATA ##################
+
+data['SinPhi'] = np.sin(np.radians(data['Phi']))
+FixZeros(data['SinPhi'].values)
+data['SinPsi'] = np.sin(np.radians(data['Psi']))
+FixZeros(data['SinPsi'].values)
+data['CosPhi'] = np.cos(np.radians(data['Phi']))
+FixZeros(data['CosPhi'].values)
+data['CosPsi'] = np.cos(np.radians(data['Psi']))
+FixZeros(data['CosPsi'].values)
+
+###########################################################
+
+################################# IMPORT DATA ON TRAINED NEURAL NETWORK MODEL ###############################
+
+oldmodel = np.loadtxt('../../models/prediction_coarse_grid.dat', delimiter=',', usecols=[2])
+
+#############################################################################################################
+
+##################### SORT MATRIX AND GET INDICES #############################
+
+def get_sorted_ind(data):
+  k = np.argsort(data, axis=None)
+  ncol = data.shape[1]
+  return list(zip(k//ncol, k%ncol))
+
+###############################################################################
+
+########################## READ PRE-TRAINED WEIGHTS AND BIASES ##############################################
+
+fc_weights = np.loadtxt('../FC1-W.csv', delimiter=',', dtype='float32')
+fc_biases = np.loadtxt('../FC1-b.csv', delimiter=',', dtype='float32').reshape(-1,1)
+
+output_weights = np.loadtxt('../Output-W.csv', delimiter=',', dtype='float32').reshape(1,-1)
+output_biases = np.loadtxt('../Output-b.csv', delimiter=',', dtype='float32').reshape(-1,1)
+
+sorted_fc_weights = get_sorted_ind(np.absolute(fc_weights))
+
+#print(fc_weights.shape)
+#print(fc_biases.shape)
+#print(output_weights.shape)
+#print(output_biases.shape)
+
+#############################################################################################################
+
+##################### FULLY CONNECTED HIDDEN LAYER #######################
+
+def fc_layer(input_data, input_dim, output_dim, name='fc'):
+  with tf.name_scope(name):
+    w = tf.Variable(fc_weights,
+      name='W')
+    b = tf.Variable(fc_biases,
+        name='b')
+    layer = tf.add(tf.matmul(w, input_data), b)
+    act = tf.nn.sigmoid(layer)
+    tf.summary.histogram('weights', w)
+    tf.summary.histogram('biases', b)
+    tf.summary.histogram('activations', act)
+    return act
+
+##########################################################################
+
+################### REGRESSION OUTPUT LAYER ##############################
+
+def output_layer(input_data, input_dim, output_dim, name='output'):
+  with tf.name_scope(name):
+    w = tf.Variable(output_weights,
+      name='W')
+    b = tf.Variable(output_biases,
+        name='b')
+    output = tf.add(tf.matmul(w, input_data), b)
+
+    tf.summary.histogram('weights', w)
+    tf.summary.histogram('biases', b)
+    tf.summary.histogram('outputs', output)
+
+    return output
+
+##########################################################################
+
+############################# GENERATE GRID FROM TRAINED MODEL #########################################
+
+def generate_grid(x, fname):
+  # full ramachandran contour plot
+  x = np.meshgrid(x,x)
+  one = np.sin(np.radians(x[1].reshape(-1)))
+  FixZeros(one)
+  two = np.sin(np.radians(x[0].reshape(-1)))
+  FixZeros(two)
+  three = np.cos(np.radians(x[1].reshape(-1)))
+  FixZeros(three)
+  four = np.cos(np.radians(x[0].reshape(-1)))
+  FixZeros(four)
+  input_vector = np.array(list(zip(one,two,three,four))).T
+
+  pred = sess.run(output, feed_dict={xs:input_vector}).ravel()
+  pred = pred - pred.min()
+
+  grid = np.array(list(zip(x[1].reshape(-1), x[0].reshape(-1), pred)))
+  np.savetxt(fname, grid, delimiter=',')
+
+  return pred
+
+########################################################################################################
+
+########################################################################################################
+
+for mod_ind in range(10):
+
+  path = 'mod%d/' % (mod_ind+1)
+  os.mkdir(path)
+  os.mkdir(path + 'figures/')
+  os.mkdir(path + 'models/')
+  os.mkdir(path + 'minima/')
+
+  with open(path + 'modification_%d.log' % (mod_ind+1), 'w') as f:
+    f.write('Weight in (%d,%d) is %.5f\n\n' % (sorted_fc_weights[mod_ind][0], sorted_fc_weights[mod_ind][1], fc_weights[sorted_fc_weights[mod_ind]]))
+    fc_weights[sorted_fc_weights[mod_ind]] = 0
+  
+    tf.reset_default_graph()
+    
+    n_inputs = 4
+    n_hidden1 = 51
+    n_outputs = 1
+    
+    xs = tf.placeholder('float32', name='X')
+    ys = tf.placeholder('float32', name='y')
+    
+    fc1 = fc_layer(xs, n_inputs, n_hidden1, name='FC1')
+    output = output_layer(fc1, n_hidden1, n_outputs, name='Output')
+    
+    init = tf.global_variables_initializer()
+    
+    saver = tf.train.Saver()
+  
+    with tf.Session() as sess:
+      init.run()
+  
+      pred = generate_grid(np.arange(-180,181,15), path + 'models/' + 'prediction_coarse_modification_%d.csv' % (mod_ind+1))
+      plot(np.arange(-180,181,15), pred, 'jet', path + 'figures/' + 'modified_model.png')
+  
+      new_rmse = np.sqrt(np.mean(np.square(pred - data['Energy'].values)))
+      f.write('RMSE of modified model vs Gaussian data: %10.5f\n' % new_rmse)
+      f.write('R^2 of modified model vs Gaussian data: %10.5f\n\n' % r_squared(data['Energy'].values, pred))
+  
+      old_rmse = np.sqrt(np.mean(np.square(oldmodel - data['Energy'].values)))
+      f.write('RMSE of original model vs Gaussian data: %10.5f\n' % old_rmse)
+      f.write('R^2 of original model vs Gaussian data: %10.5f\n\n' % r_squared(data['Energy'].values, oldmodel))
+
+      pred = generate_grid(np.arange(-180,181,1), path + 'models/' + 'prediction_fine_modification_%d.csv' % (mod_ind+1))
+
+      x,y,z = np.loadtxt(path + 'models/' + 'prediction_fine_modification_%d.csv' % (mod_ind+1), delimiter=',', unpack=True).astype('float64')
+      extmin,extmax = getextrema(x,y,z)
+
+      with open(path + 'minima/' + 'minima.dat', 'w') as f2:
+        f2.write('Number of minima found: ' + str(len(extmin)) + '\n')
+        f2.write('Conformation     phi         psi      RelEnergy\n')
+        f2.write("------------------------------------------------\n")
+        for found_minima in range(len(extmin)):
+          f2.write("%s : %8.3f , %8.3f : %10.5f\n" % (conf(extmin[found_minima,0],extmin[found_minima,1]),extmin[found_minima,0],extmin[found_minima,1],extmin[found_minima,2]))
+
+      save_path = saver.save(sess, path + 'models/' + 'modified_model_%d.ckpt' % (mod_ind+1))
+    
+  plot(np.arange(-180,181,15), data['Energy'].values, 'coolwarm', path + 'figures/' + 'original.png')
+  plot(np.arange(-180,181,15), oldmodel, 'jet', path + 'figures/' + 'old_model.png')
+
+  ####################### PART 2 ###################################################
+  
+  def trained_model(angles):
+    phi, psi = angles
+    del angles
+
+    with tf.Session() as sess:
+      saver.restore(sess, path + 'models/' + 'modified_model_%d.ckpt' % (mod_ind+1))
+
+      phi_sin = np.sin(np.radians(phi))
+      psi_sin = np.sin(np.radians(psi))
+      phi_cos = np.cos(np.radians(phi))
+      psi_cos = np.cos(np.radians(psi))
+      x = np.array([phi_sin, psi_sin, phi_cos, psi_cos])
+      for j in range(len(x)):
+        if np.allclose(x[j],0):
+          x[j] = 0
+      x = x.reshape(-1,1)
+
+      pred = sess.run(output, feed_dict={xs:x}).ravel()
+
+    return pred[0]
+
+  def convert(angle):
+    if angle < -180:
+      angle = angle + 360
+    elif angle > 180:
+      angle = angle - 360
+    return angle
+
+  vconvert = np.vectorize(convert)
+
+  guess_minima = np.loadtxt(path + 'minima/' + 'minima.dat', skiprows=3, usecols=[2,4])
+  guess_energy = np.loadtxt(path + 'minima/' + 'minima.dat', skiprows=3, usecols=[6])
+
+  with open(path + 'minima/' + 'new_minima.dat', 'w') as f:
+    with open(path + 'minima/' + 'better_minima.dat', 'w') as g:
+      g.write('Number of minima found: %d\n' % len(guess_minima))
+      g.write('Conformation     phi         psi      RelEnergy\n')
+      g.write('-' * 48 + '\n')
+
+      opt_angles = []
+      opt_energies = []
+
+      # iterate over each minima found and do optimization at that point
+      for i,j in zip(guess_minima, guess_energy):
+        xopt, fopt, _, _, _ = fmin(trained_model, x0=i, disp=False, full_output=True)
+        xopt = vconvert(xopt)
+        opt_angles.append(xopt)
+        opt_energies.append(fopt)
+
+      opt_energies = np.array(opt_energies)
+      opt_energies = opt_energies - opt_energies.min()
+            
+      for i,j,k,l in zip(guess_minima, guess_energy, opt_angles, opt_energies):
+        f.write('Old: %s   %10.5f,   %10.5f,   %10.5f\n' % (conf(i[0], i[1]), i[0], i[1], j))
+        f.write('New: %s   %10.5f,   %10.5f,   %10.5f\n\n' % (conf(k[0], k[1]), k[0], k[1], l))
+        g.write('%s : %8.3f , %8.3f : %10.5f\n' % (conf(k[0], k[1]), k[0], k[1], l))
+                                    
+
+print('Runtime:', datetime.now() - t0)
